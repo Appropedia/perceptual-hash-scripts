@@ -6,6 +6,7 @@ import sys
 import sqlite3
 import PIL
 import imagehash
+import json
 
 #Perform a recursive depth-first search on all image hashes in the database that are within a
 #maximum hamming distance from a given reference hash.
@@ -114,26 +115,31 @@ def show_progress(current, total):
       '=' * current_width,
       '-' * (total_width - current_width),
       100 * current // total),
-    end='' if current < total else '\n')
+    end='' if current < total else '\n',
+    file = sys.stderr)
 
 #Perform a single image search on the database for similar images, then print all matches.
-def do_single_search(con, image_file, max_dist):
+def do_single_search(con, image_file, max_dist, json_output):
   img = PIL.Image.open(image_file)
   string_hash = str(imagehash.phash(img))
   tuple_hash = tuple(int(string_hash[i: i+2], 16) for i in range(0, len(string_hash), 2))
 
   matches = search_similar_images(con, tuple_hash, max_dist)
 
-  if matches:
-    print('\n'.join('{}'.format(filename) for filename in matches))
+  #Format and print the results.
+  if json_output:
+    print(json.dumps(tuple(matches), indent = 2))
   else:
-    print('no matches found')
+    if matches:
+      print('\n'.join('{}'.format(filename) for filename in matches))
+    else:
+      print('no matches found')
 
 #Perform a full search on the image database for similar images, then print them in similarity
 #groups.
 #Parameters:
 # - max_dist: The maximum allowed hamming distance. Images are grouped by coalescing chains.
-def do_full_search(con, max_dist):
+def do_full_search(con, max_dist, json_output):
   #Obtain the amount of distinct images in the table.
   image_total = con.execute('SELECT COUNT(DISTINCT filename) FROM images').fetchone()[0]
 
@@ -169,22 +175,31 @@ def do_full_search(con, max_dist):
   merge_sets(match_list)
 
   #Format and print the results.
-  for index, match_set in enumerate(match_list):
-    print('Group {}'.format(index))
-    print('\n'.join('  {}'.format(filename) for filename in match_set))
+  if json_output:
+    print(json.dumps([tuple(s) for s in match_list], indent = 2))
+  else:
+    if match_list:
+      for index, match_set in enumerate(match_list):
+        print('Group {}'.format(index))
+        print('\n'.join('  {}'.format(filename) for filename in match_set))
+    else:
+      print('no matches found')
 
 #Create an argument parser and parse all arguments.
 parser = argparse.ArgumentParser(description = 'Search for similar images using perceptual hashes')
-parser.add_argument('-d', '--hamming-dist',
-                    type = int,
-                    default = 0,
-                    help = 'measures how different the image s allowed to be (range 0-16, default '
-                           'is 0 which means very similar)')
 parser.add_argument('image_file',
                     type = str,
                     nargs = '?',
                     help = 'image to be used as reference - perform a full database search if '
                            'omitted')
+parser.add_argument('-d', '--hamming-dist',
+                    type = int,
+                    default = 0,
+                    help = 'measures how different the image s allowed to be (range 0-16, default '
+                           'is 0 which means very similar)')
+parser.add_argument('-j', '--json',
+                    action = 'store_true',
+                    help = 'Generate output in JSON format instead of simple text')
 parser.add_argument('-db', '--database',
                     type = str,
                     default = os.path.join(os.path.dirname(sys.argv[0]), 'image-db.sqlite3'),
@@ -202,6 +217,6 @@ con = sqlite3.connect(args.database)
 
 #Do a single image search if an image filename was provided. Do a full search otherwise.
 if args.image_file:
-  do_single_search(con, args.image_file, args.hamming_dist)
+  do_single_search(con, args.image_file, args.hamming_dist, args.json)
 else:
-  do_full_search(con, args.hamming_dist)
+  do_full_search(con, args.hamming_dist, args.json)
